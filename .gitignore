@@ -11,3 +11,6 @@ reports/plots/
 
 # os
 .DS_Store
+
+#env
+.env

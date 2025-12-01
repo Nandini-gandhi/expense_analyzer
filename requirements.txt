@@ -5,3 +5,5 @@ rapidfuzz>=3.9
 streamlit>=1.38
 numpy>=1.26
 pyyaml>=6.0
+flask>=3.0
+flask-cors>=4.0
