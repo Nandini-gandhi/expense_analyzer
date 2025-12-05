@@ -1,4 +1,4 @@
-# Expense Analyzer v2 - AI-Powered Financial Dashboard
+# Expense Analyzer -  Financial Dashboard
 
 A modern web application for analyzing personal expenses with AI-powered insights. Built with React, Flask, and Google Gemini AI.
 
