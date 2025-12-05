@@ -1,4 +1,4 @@
-"""Flask REST API for Expense Analyzer - connects backend logic to frontend UI."""
+"""Flask API for expense analyzer app."""
 
 import os
 import json
@@ -10,29 +10,39 @@ import pandas as pd
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 from src.categorize_transactions import categorize, load_overrides, load_one_off, clean_string
 from src.clean_transactions import clean_all
 from src.forecast import forecast_by_category, forecast_total_spend
-from src.plot_charts import _read_data, CLEAN_DIR
 
 app = Flask(__name__)
 CORS(app)
 
+# config paths
 OVERRIDES_JSON = "data/config/overrides.json"
 ONE_OFF_CSV = "data/config/one_off_overrides.csv"
 RAW_DIR = "data/raw"
+CLEAN_DIR = "data/clean"
 
-# Configure Gemini API (you'll need to set your API key)
+# setup gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 genai.configure(api_key=GEMINI_API_KEY)
 
 
 def _load_clean_df():
-    """Load cleaned transactions."""
+    """Load the cleaned transaction data."""
     path = os.path.join(CLEAN_DIR, "transactions_clean.csv")
+    if not os.path.exists(path):
+        # return empty df with expected columns
+        return pd.DataFrame(columns=["date", "description", "amount_signed", "amount_spend", "category"])
+    df = pd.read_csv(path, parse_dates=["date"])
+    return df
+
+
+def _read_data(data_dir):
+    """Read categorized transactions."""
+    path = os.path.join(data_dir, "transactions_categorized.csv")
     if not os.path.exists(path):
         return pd.DataFrame(columns=["date", "description", "amount_signed", "amount_spend", "category"])
     df = pd.read_csv(path, parse_dates=["date"])
@@ -40,32 +50,32 @@ def _load_clean_df():
 
 
 def _load_cat_df():
-    """Load categorized transactions."""
+    """Helper to load categorized data."""
     return _read_data(CLEAN_DIR)
 
 
 def _save_cat_df(df_cat: pd.DataFrame):
-    """Save categorized transactions."""
+    """Save categorized data to csv."""
     out_path = os.path.join(CLEAN_DIR, "transactions_categorized.csv")
     df_cat.to_csv(out_path, index=False)
     return out_path
 
 
 def _save_overrides(d):
-    """Save merchant override rules."""
+    """Save merchant rules to json."""
     os.makedirs(os.path.dirname(OVERRIDES_JSON), exist_ok=True)
     with open(OVERRIDES_JSON, "w") as f:
         json.dump(d, f, indent=2)
 
 
 def _save_one_off_map(m):
-    """Save one-time transaction overrides."""
+    """Save one-off overrides."""
     rows = [{"txn_id": k, "category": v} for k, v in m.items()]
     pd.DataFrame(rows).to_csv(ONE_OFF_CSV, index=False)
 
 
 def _recompute_and_refresh():
-    """Re-run categorization and refresh state."""
+    """Re-categorize everything after changes."""
     clean_df = _load_clean_df()
     df_cat = categorize(clean_df)
     _save_cat_df(df_cat)
@@ -73,7 +83,7 @@ def _recompute_and_refresh():
 
 
 def _reclean_and_refresh():
-    """Run multi-file cleaning then categorize and refresh state."""
+    """Clean raw files then re-categorize."""
     try:
         clean_all()
     except Exception as e:
@@ -82,7 +92,7 @@ def _reclean_and_refresh():
 
 
 def _save_uploaded_files(files):
-    """Persist uploaded files into data/raw with unique names."""
+    """Save uploaded files to data/raw."""
     import re
     os.makedirs(RAW_DIR, exist_ok=True)
     saved = []
@@ -90,7 +100,7 @@ def _save_uploaded_files(files):
         base_name = os.path.splitext(uf.filename)[0]
         safe_base = re.sub(r"[^A-Za-z0-9_-]", "_", base_name) or "uploaded"
         fname = safe_base + ".csv"
-        # ensure uniqueness
+        # make sure filename is unique
         counter = 1
         while os.path.exists(os.path.join(RAW_DIR, fname)):
             fname = f"{safe_base}_{counter}.csv"
@@ -102,7 +112,7 @@ def _save_uploaded_files(files):
 
 
 def _delete_raw_file(filename):
-    """Delete a raw CSV and refresh dataset."""
+    """Delete a csv file from raw folder."""
     path = os.path.join(RAW_DIR, filename)
     if os.path.exists(path):
         os.remove(path)
@@ -112,17 +122,17 @@ def _delete_raw_file(filename):
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
+    """Just a health check."""
     return jsonify({"status": "ok", "message": "Expense Analyzer API is running"})
 
 
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
-    """Get transactions with optional filters."""
+    """Get all transactions (with filters)."""
     try:
         df = _load_cat_df()
         
-        # Get query parameters
+        # grab query params
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         category = request.args.get('category')
@@ -132,7 +142,7 @@ def get_transactions():
         max_amount = request.args.get('max_amount')
         exclude_transfers = request.args.get('exclude_transfers', 'true').lower() == 'true'
         
-        # Apply filters
+        # apply filters
         if exclude_transfers:
             df = df[df["category"] != "EXCLUDE"]
         
@@ -155,7 +165,7 @@ def get_transactions():
         if max_amount:
             df = df[df["amount_spend"] <= float(max_amount)]
         
-        # Convert to JSON-serializable format with standardized fields
+        # convert to json format
         result = []
         for _, row in df.iterrows():
             result.append({
@@ -176,7 +186,7 @@ def get_transactions():
 
 @app.route('/api/summary', methods=['GET'])
 def get_summary():
-    """Get overview summary stats."""
+    """Get summary stats for dashboard."""
     try:
         df = _load_cat_df()
         
@@ -184,20 +194,20 @@ def get_summary():
         end_date = request.args.get('end_date')
         source = request.args.get('source', 'All')
         
-        # Filter by date
+        # filter by date range
         if start_date:
             df = df[df["date"] >= pd.to_datetime(start_date)]
         if end_date:
             df = df[df["date"] <= pd.to_datetime(end_date)]
         
-        # Filter by source
+        # filter by source
         if source != "All" and "source" in df.columns:
             df = df[df["source"] == source]
         
-        # Exclude transfers
+        # exclude transfer transactions
         base_filtered = df[df["category"] != "EXCLUDE"].copy()
         
-        # Separate income and expenses
+        # split income vs expenses
         income_df = base_filtered[base_filtered["category"] == "Income"]
         expense_df = base_filtered[base_filtered["category"] != "Income"]
         
@@ -218,7 +228,7 @@ def get_summary():
 
 @app.route('/api/categories', methods=['GET'])
 def get_categories():
-    """Get category breakdown."""
+    """Get spending by category."""
     try:
         df = _load_cat_df()
         
@@ -226,20 +236,21 @@ def get_categories():
         end_date = request.args.get('end_date')
         source = request.args.get('source', 'All')
         
-        # Filter by date
+        # TODO: maybe cache this for better performance
+        # filter by date
         if start_date:
             df = df[df["date"] >= pd.to_datetime(start_date)]
         if end_date:
             df = df[df["date"] <= pd.to_datetime(end_date)]
         
-        # Filter by source
+        # filter by source
         if source != "All" and "source" in df.columns:
             df = df[df["source"] == source]
         
-        # Get expenses only
+        # only expenses
         expense_df = df[(df["category"] != "EXCLUDE") & (df["category"] != "Income")].copy()
         
-        # Group by category
+        # group by category
         cat_summary = (
             expense_df.groupby("category")
             .agg(total=("amount_spend", "sum"), count=("amount_spend", "count"))
@@ -268,7 +279,7 @@ def get_categories():
 
 @app.route('/api/daily-spend', methods=['GET'])
 def get_daily_spend():
-    """Get daily spending data."""
+    """Get spending data by day."""
     try:
         df = _load_cat_df()
         
@@ -307,7 +318,7 @@ def get_daily_spend():
 
 @app.route('/api/forecast', methods=['GET'])
 def get_forecast():
-    """Get forecast data."""
+    """Get spending predictions."""
     try:
         df = _load_cat_df()
         
@@ -315,7 +326,7 @@ def get_forecast():
         exclude_months = request.args.getlist('exclude_months')
         exclude_categories = request.args.getlist('exclude_categories')
         
-        # Prepare data
+        # prep data for forecast
         expenses_df = df[df["category"] != "EXCLUDE"].copy()
         
         if exclude_months:
@@ -325,13 +336,13 @@ def get_forecast():
         if exclude_categories:
             expenses_df = expenses_df[~expenses_df["category"].isin(exclude_categories)]
         
-        # Get total forecast
+        # get total forecast
         total_forecast = forecast_total_spend(expenses_df, months_lookback=months_lookback)
         
-        # Get category forecast
+        # get per-category forecast
         cat_forecast = forecast_by_category(expenses_df, months_lookback=months_lookback)
         
-        # Convert category forecast to list
+        # convert to list for json
         cat_result = []
         if not cat_forecast.empty:
             for _, row in cat_forecast.iterrows():
@@ -354,23 +365,23 @@ def get_forecast():
 
 @app.route('/api/merchants', methods=['GET'])
 def get_merchants():
-    """Get list of merchants."""
+    """Get merchant list for settings."""
     try:
         df = _load_cat_df()
         
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         
-        # Filter by date
+        # filter by date
         if start_date:
             df = df[df["date"] >= pd.to_datetime(start_date)]
         if end_date:
             df = df[df["date"] <= pd.to_datetime(end_date)]
         
-        # Get expenses only
+        # only expenses
         expense_df = df[(df["category"] != "EXCLUDE")].copy()
         
-        # Get unique merchants with their current category and sample transactions
+        # get unique merchants with their category and recent txns
         merchants = []
         for merchant in sorted(expense_df["merchant"].dropna().unique()):
             merchant_txns = expense_df[expense_df["merchant"] == merchant].sort_values("date", ascending=False).head(3)
@@ -397,7 +408,7 @@ def get_merchants():
 
 @app.route('/api/settings/merchant-rules', methods=['GET'])
 def get_merchant_rules():
-    """Get all merchant override rules."""
+    """Return all merchant override rules."""
     try:
         overrides = load_overrides()
         return jsonify({"rules": overrides})
@@ -407,7 +418,7 @@ def get_merchant_rules():
 
 @app.route('/api/settings/merchant-rules', methods=['POST'])
 def add_merchant_rule():
-    """Add or update a merchant rule."""
+    """Add or update merchant rule."""
     try:
         data = request.json
         merchant = data.get('merchant')
@@ -421,7 +432,7 @@ def add_merchant_rule():
         overrides[norm_merchant] = category
         _save_overrides(overrides)
         
-        # Re-categorize
+        # re-run categorization
         _recompute_and_refresh()
         
         return jsonify({"success": True, "message": f"Updated rule for {merchant}"})
@@ -431,7 +442,7 @@ def add_merchant_rule():
 
 @app.route('/api/settings/one-off', methods=['GET'])
 def get_one_off_overrides():
-    """Get all one-off overrides."""
+    """Get one-off transaction overrides."""
     try:
         one_off = load_one_off()
         return jsonify({"overrides": one_off})
@@ -441,7 +452,7 @@ def get_one_off_overrides():
 
 @app.route('/api/settings/one-off', methods=['POST'])
 def add_one_off_override():
-    """Add or update a one-off override."""
+    """Add or update one-off override."""
     try:
         data = request.json
         txn_id = data.get('txn_id')
@@ -454,7 +465,7 @@ def add_one_off_override():
         one_off[str(txn_id)] = category
         _save_one_off_map(one_off)
         
-        # Re-categorize
+        # re-categorize everything
         _recompute_and_refresh()
         
         return jsonify({"success": True, "message": "Updated one-off override"})
@@ -464,7 +475,7 @@ def add_one_off_override():
 
 @app.route('/api/upload', methods=['POST'])
 def upload_files():
-    """Upload CSV files."""
+    """Handle CSV file uploads."""
     try:
         if 'files' not in request.files:
             return jsonify({"error": "No files provided"}), 400
@@ -472,7 +483,7 @@ def upload_files():
         files = request.files.getlist('files')
         saved = _save_uploaded_files(files)
         
-        # Re-clean and categorize
+        # clean and categorize new data
         df = _reclean_and_refresh()
         
         return jsonify({
@@ -487,7 +498,7 @@ def upload_files():
 
 @app.route('/api/files', methods=['GET'])
 def list_files():
-    """List all raw CSV files."""
+    """List uploaded CSV files."""
     try:
         files = []
         if os.path.exists(RAW_DIR):
@@ -499,7 +510,7 @@ def list_files():
 
 @app.route('/api/files/<filename>', methods=['DELETE'])
 def delete_file(filename):
-    """Delete a raw CSV file."""
+    """Delete uploaded CSV file."""
     try:
         print(f"Attempting to delete file: {filename}")
         success = _delete_raw_file(filename)
@@ -509,16 +520,16 @@ def delete_file(filename):
         
         print(f"File deleted successfully: {filename}")
         
-        # Check remaining files
+        # check what's left
         remaining = [f for f in os.listdir(RAW_DIR) if f.endswith('.csv')] if os.path.exists(RAW_DIR) else []
         print(f"Remaining files: {remaining}")
         
         if remaining:
-            # Re-clean and categorize remaining files
+            # re-process remaining files
             print("Re-cleaning and refreshing remaining files...")
             _reclean_and_refresh()
         else:
-            # No files left - delete the processed data files entirely
+            # no files left, delete everything
             print("No files left, deleting processed data files...")
             clean_path = os.path.join(CLEAN_DIR, "transactions_clean.csv")
             cat_path = os.path.join(CLEAN_DIR, "transactions_categorized.csv")
@@ -557,7 +568,7 @@ def get_sources():
 
 @app.route('/api/date-range', methods=['GET'])
 def get_date_range():
-    """Get min and max dates from data."""
+    """Get min/max dates from dataset."""
     try:
         df = _load_cat_df()
         if df.empty or "date" not in df.columns:
@@ -580,7 +591,7 @@ def get_date_range():
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    """AI chatbot endpoint - answers questions about spending data using Gemini."""
+    """AI chatbot endpoint - uses Gemini to answer spending questions."""
     try:
         data = request.get_json()
         question = data.get('question', '')
@@ -592,24 +603,24 @@ def chat():
         if not question:
             return jsonify({"error": "No question provided"}), 400
         
-        # Load transaction data for the date range
+        # load transaction data
         df = _load_cat_df()
         if df.empty:
             return jsonify({"answer": "I don't have any transaction data to analyze yet. Please upload your bank statement first."})
         
-        # Filter by date range if provided
+        # filter by date if provided
         if start_date and end_date:
             df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
         
         print(f"Filtered data: {len(df)} transactions")
         
-        # Prepare data summary for the AI
+        # prep data for AI
         total_spend = df[df['amount_spend'] > 0]['amount_spend'].sum()
         category_breakdown = df[df['amount_spend'] > 0].groupby('category')['amount_spend'].sum().to_dict()
         top_merchants = df[df['amount_spend'] > 0].groupby('merchant')['amount_spend'].sum().nlargest(10).to_dict()
         transaction_count = len(df)
         
-        # Create context for the AI
+        # build context string for gemini
         context = f"""You are a helpful financial assistant analyzing spending data.
 
 Date Range: {start_date} to {end_date}

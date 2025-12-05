@@ -1,4 +1,4 @@
-"""Clean and standardize raw bank CSV files."""
+"""Clean raw bank CSV files."""
 
 import os
 import pandas as pd
@@ -9,7 +9,7 @@ CLEAN_DIR = "data/clean"
 
 
 def find_column(df, possible_names):
-    """Find a column by checking multiple possible names (case-insensitive)."""
+    """Find column by trying multiple names (case-insensitive)."""
     col_lower = {c.lower(): c for c in df.columns}
     
     for name in possible_names:
@@ -20,7 +20,7 @@ def find_column(df, possible_names):
 
 
 def parse_date(value):
-    """Try to parse a date string."""
+    """Parse date string."""
     if pd.isna(value):
         return pd.NaT
     
@@ -32,10 +32,11 @@ def parse_date(value):
 
 
 def clean_transactions(raw_path):
-    """Read a single raw CSV and return cleaned DataFrame (not saved)."""
+    """Read and clean a single CSV file."""
     print(f"\nReading: {raw_path}")
     df = pd.read_csv(raw_path)
 
+    # try to find required columns
     date_col = find_column(df, ["transaction date", "date", "posted date", "post date"])
     desc_col = find_column(df, ["description", "details", "memo"])
     amt_col = find_column(df, ["amount", "transaction amount", "value"])
@@ -58,7 +59,7 @@ def clean_transactions(raw_path):
 
 
 def clean_all(raw_dir=RAW_DIR, save_path=os.path.join(CLEAN_DIR, "transactions_clean.csv")):
-    """Clean all CSVs in raw_dir, add source column, concatenate, and save."""
+    """Clean all CSVs in raw dir and combine them."""
     csvs = [f for f in os.listdir(raw_dir) if f.endswith(".csv")]
     if not csvs:
         raise FileNotFoundError("No CSV files found in data/raw/")
@@ -68,6 +69,7 @@ def clean_all(raw_dir=RAW_DIR, save_path=os.path.join(CLEAN_DIR, "transactions_c
         path = os.path.join(raw_dir, fname)
         try:
             cleaned = clean_transactions(path)
+            # track which file it came from
             cleaned["source"] = os.path.splitext(fname)[0]
             frames.append(cleaned)
         except Exception as e:
@@ -84,7 +86,7 @@ def clean_all(raw_dir=RAW_DIR, save_path=os.path.join(CLEAN_DIR, "transactions_c
 
 
 def main():
-    """Clean all CSVs in raw folder (multi-file support)."""
+    """Clean all raw CSVs."""
     clean_all()
 
 
