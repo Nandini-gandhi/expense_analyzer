@@ -2,6 +2,8 @@
 
 A modern web application for analyzing personal expenses with AI-powered insights. Built with React, Flask, and Google Gemini AI.
 
+**📹 Video Demo:** Watch `Expense Analyzer.mp4` for a complete walkthrough of the application, code explanation, and implementation decisions.
+
 ## Features
 
 - 📊 **Interactive Dashboard** - Visualize spending patterns with charts and graphs
